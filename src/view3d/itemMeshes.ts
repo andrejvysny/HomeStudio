@@ -624,6 +624,21 @@ const outlet: Builder = (g, { item }) => {
   }
 };
 
+// RJ45 data outlet: square faceplate with one or two keystone jacks — a
+// dark rectangular port with a latch notch, distinct from the round Type E well.
+const dataOutlet: Builder = (g, { item }) => {
+  const ports = Math.max(1, Math.min(2, Math.round(item.params?.gangs ?? 1)));
+  const back = -item.d / 2;
+  const cy = item.h / 2;
+  box(g, item.w, item.h, 0.016, matte('#f4f3ef'), 0, 0, back + 0.008);
+  const jackMat = matte('#26251f');
+  const pitch = (item.w * 0.7) / ports;
+  for (let i = 0; i < ports; i++) {
+    const cx = -item.w * 0.35 + pitch * (i + 0.5);
+    box(g, pitch * 0.6, 0.016, 0.004, jackMat, cx, cy - 0.008, back + 0.018);
+  }
+};
+
 /* ---------------- custom parts (Part Studio) ---------------- */
 
 const custom: Builder = (g, { item, part, design, host, finish }) => {
@@ -666,6 +681,7 @@ const BUILDERS: Record<string, Builder> = {
   strip,
   water,
   outlet,
+  dataOutlet,
   decor,
   custom,
 };

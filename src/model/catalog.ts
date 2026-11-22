@@ -56,6 +56,7 @@ export type ItemKind =
   | 'window'
   | 'water'
   | 'outlet'
+  | 'dataOutlet'
   | 'decor'
   | 'custom';
 
@@ -270,6 +271,23 @@ export const CATALOG: CatalogSection[] = [
         elevation: 1.05,
         color: '#f2f1ec',
         params: [{ key: 'gangs', label: 'Sockets', min: 1, max: 4, def: 1, widthPer: 0.086 }],
+        marker: true,
+        noCollide: true,
+      }),
+      def({
+        id: 'outlet-data',
+        kind: 'dataOutlet',
+        // Structured-cabling (SLP) wall outlet: one 80 mm plate carrying one or
+        // two RJ45 keystones. The port count is stored under the shared
+        // `gangs` key so renderPlan threads it to the symbol like a socket's,
+        // but it never widens the plate — two ports fit one faceplate.
+        label: 'Data outlet (RJ45)',
+        w: 0.086,
+        d: 0.035,
+        h: 0.086,
+        elevation: 0.257,
+        color: '#f2f1ec',
+        params: [{ key: 'gangs', label: 'Ports', min: 1, max: 2, def: 2 }],
         marker: true,
         noCollide: true,
       }),

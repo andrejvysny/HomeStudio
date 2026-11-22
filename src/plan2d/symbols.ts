@@ -172,9 +172,18 @@ export function drawPlanSymbol(
     return;
   }
   if (
-    !['pendant', 'spot', 'water', 'outlet', 'stool', 'door', 'window', 'rug', 'decor'].includes(
-      kind
-    )
+    ![
+      'pendant',
+      'spot',
+      'water',
+      'outlet',
+      'dataOutlet',
+      'stool',
+      'door',
+      'window',
+      'rug',
+      'decor',
+    ].includes(kind)
   ) {
     ctx.globalAlpha = bodyAlpha;
     ctx.fillRect(-hw, -hd, w, d);
@@ -407,6 +416,21 @@ export function drawPlanSymbol(
       }
       break;
     }
+    case 'dataOutlet': {
+      // structured-cabling notation: a square plate with one filled block per
+      // RJ45 port, so it never reads as a round mains socket.
+      const ports = Math.max(1, Math.min(2, Math.round(style.gangs ?? 1)));
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-hw, -hd, w, d);
+      ctx.strokeRect(-hw, -hd, w, d);
+      ctx.fillStyle = ink;
+      const pw = (w * 0.7) / ports;
+      for (let i = 0; i < ports; i++) {
+        const cx = -hw + w * 0.15 + pw * (i + 0.5);
+        ctx.fillRect(cx - pw * 0.35, -hd * 0.5, pw * 0.7, hd);
+      }
+      break;
+    }
     case 'door': {
       // swing arc: hinge at (-hw, 0), leaf opening inward (+y);
       // mirrored for right hinges / outward swings
@@ -451,6 +475,7 @@ export function drawPlanSymbol(
       'window',
       'water',
       'outlet',
+      'dataOutlet',
       'stool',
       'table',
       'chair',
