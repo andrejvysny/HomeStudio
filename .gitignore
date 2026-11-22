@@ -14,3 +14,7 @@ graphify-out/
 
 # playwright-cli scratch (snapshots, console logs)
 .playwright-cli/
+
+# local-only: client reference plans, stray bun lockfile (npm is the package manager)
+specs/
+bun.lock
