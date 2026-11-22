@@ -11,3 +11,6 @@ blob-report/
 
 # regenerated knowledge graph (~3 MB, includes graph.html)
 graphify-out/
+
+# playwright-cli scratch (snapshots, console logs)
+.playwright-cli/
