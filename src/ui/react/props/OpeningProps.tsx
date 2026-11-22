@@ -13,14 +13,20 @@ const SWING: readonly (readonly [string, string])[] = [
   ['out', 'Opens out'],
 ];
 
+const KIND: readonly (readonly [string, string])[] = [
+  ['door', 'Door'],
+  ['window', 'Window'],
+];
+
 /**
  * A selected door or window — src/ui/ui.ts's renderOpeningProps.
  *
- * An opening is anchored to `wallId` + an offset from that wall's start
- * corner, so "From corner" is the field a plan drag moves: it is `live`, and
- * follows the drag through the 'transient' channel without re-rendering the
- * panel. Its cap is the wall's current length, which is why the row only
- * renders once that wall resolves.
+ * Position is given as the two GAPS between the opening's edges and the wall
+ * ends — the same numbers the plan's dimension lines show — named left/right
+ * as seen from inside the room facing the wall. (It used to be "From corner",
+ * the centre offset from an unnamed corner, which never matched the plan.)
+ * The left gap is `live`: it follows a plan drag through the 'transient'
+ * channel without re-rendering the panel.
  */
 export function OpeningProps({ id }: { id: string }): ReactElement | null {
   const store = useStore();
@@ -28,14 +34,29 @@ export function OpeningProps({ id }: { id: string }): ReactElement | null {
   if (!o) return null;
   const wall = store.wallById(o.wallId);
   const one = [o];
+  // facing the wall from inside, is its START on the viewer's left?
+  const startOnLeft = wall ? wall.inward.y * wall.dir.x - wall.inward.x * wall.dir.y > 0 : true;
+  const len = wall?.len ?? 0;
+  const gapStart = (x: typeof o): number => x.offset - x.width / 2;
+  const gapEnd = (x: typeof o): number => len - x.offset - x.width / 2;
+  const setGapStart = (m: number): void => store.updateOpening(id, { offset: m + o.width / 2 });
+  const setGapEnd = (m: number): void => store.updateOpening(id, { offset: len - m - o.width / 2 });
 
   return (
     <>
       <h2 className="props-title">{o.type === 'door' ? 'Door' : 'Window'}</h2>
-      <p className="props-sub">Slides along its wall — drag it in the plan</p>
+      <p className="props-sub">Drag it along the wall in the plan, or type the gaps below</p>
 
       <div className="prop-section">
         <div className="prop-section-title">Size</div>
+        <ChoiceRow
+          options={KIND}
+          current={o.type}
+          onPick={(v) => {
+            // a door stands on the floor; a window keeps its sill (0 = French window)
+            store.updateOpening(id, v === 'door' ? { type: 'door', sill: 0 } : { type: 'window' });
+          }}
+        />
         <LengthField
           label="Width"
           items={one}
@@ -63,16 +84,28 @@ export function OpeningProps({ id }: { id: string }): ReactElement | null {
           />
         ) : null}
         {wall ? (
-          <LengthField
-            label="From corner"
-            items={one}
-            read={(x) => x.offset}
-            onCommit={(m) => store.updateOpening(id, { offset: m })}
-            min={0}
-            max={wall.len}
-            cls="opening-off"
-            live
-          />
+          <>
+            <LengthField
+              label="Gap left"
+              items={one}
+              read={startOnLeft ? gapStart : gapEnd}
+              onCommit={startOnLeft ? setGapStart : setGapEnd}
+              min={0}
+              max={wall.len}
+              cls="opening-off"
+              live
+            />
+            <LengthField
+              label="Gap right"
+              items={one}
+              read={startOnLeft ? gapEnd : gapStart}
+              onCommit={startOnLeft ? setGapEnd : setGapStart}
+              min={0}
+              max={wall.len}
+              cls="opening-off-end"
+              live
+            />
+          </>
         ) : null}
       </div>
 

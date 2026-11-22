@@ -37,6 +37,13 @@ export interface KeyBinding {
   commandId: CommandId;
   /** survives focus in an input/textarea/contentEditable */
   allowWhileTyping?: boolean;
+  /**
+   * survives focus in a field whose text has already been COMMITTED (no edit
+   * since its last `change`). Undo/redo use it: after typing 1500 + Enter,
+   * Ctrl+Z must undo the resize, not just roll the box's text back to 2000
+   * while the model stays at 1500.
+   */
+  allowWhenCommitted?: boolean;
   /** default true — suppressed only when the command ran; see the note above */
   preventDefault?: boolean;
 }
@@ -71,9 +78,9 @@ export const KEY_BINDINGS: readonly KeyBinding[] = [
   // landed on a free segment, so it can never shadow finishing a room.
   { key: 'enter', commandId: 'place.commit' },
 
-  { key: 'z', mod: true, shift: true, commandId: 'history.redo' },
-  { key: 'z', mod: true, shift: false, commandId: 'history.undo' },
-  { key: 'y', mod: true, commandId: 'history.redo' },
+  { key: 'z', mod: true, shift: true, commandId: 'history.redo', allowWhenCommitted: true },
+  { key: 'z', mod: true, shift: false, commandId: 'history.undo', allowWhenCommitted: true },
+  { key: 'y', mod: true, commandId: 'history.redo', allowWhenCommitted: true },
   { key: 'd', mod: true, commandId: 'selection.duplicate' },
   { key: 'a', mod: true, commandId: 'selection.all' },
 

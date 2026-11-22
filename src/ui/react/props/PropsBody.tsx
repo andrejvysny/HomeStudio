@@ -3,6 +3,7 @@ import type { Item } from '../../../model/types';
 import { useEditor, useStore } from '../services';
 import { countRender } from '../debugCounters';
 import { useChannel } from '../hooks/useStore';
+import { workspace } from '../../workspaceState';
 import { CornerProps } from './CornerProps';
 import { ItemProps } from './ItemProps';
 import { OpeningProps } from './OpeningProps';
@@ -41,6 +42,20 @@ export function PropsBody(): ReactElement {
   // no dependency array: one tick per COMMITTED render, which is what the
   // transient rule is stated in
   useEffect(() => countRender('propsBody'));
+
+  // Output exports the WHOLE design; an editable inspector for whatever was
+  // last selected (on a canvas this pane covers) only invited stray edits
+  if (workspace() === 'output') {
+    return (
+      <>
+        <h2 className="props-title">Output</h2>
+        <p className="props-sub">
+          Every document here is built from the whole design — {store.design.rooms.length} rooms,{' '}
+          {store.design.items.length} items, {store.design.openings.length} doors and windows.
+        </p>
+      </>
+    );
+  }
 
   const sel = editor.selection;
   // An id that resolves nowhere falls through to the room panel, exactly as

@@ -118,7 +118,13 @@ export function snapItem(
       const pr = projectOnWall(wall, { x, y });
       if (pr.t < -0.05 || pr.t > wall.len + 0.05) continue;
       // the wall face this room sees sits `faceOffset` in from the edge
-      const err = Math.abs(pr.side - (wall.faceOffset + d / 2));
+      const target = wall.faceOffset + d / 2;
+      // Nearer the wall than the snapped centre — even inside the slab — is
+      // still "against this wall". Measuring |side − target| made moving the
+      // cursor CLOSER to the wall drop the snap, and the item landed half in it.
+      const inSlab = pr.side > wall.faceOffset - wall.thickness - 0.05;
+      const err =
+        pr.side >= target ? pr.side - target : inSlab ? (target - pr.side) * 0.01 : Infinity;
       if (err > WALL_SNAP_DIST) continue;
       if (!best || err < best.err) best = { wall, t: pr.t, err };
     }

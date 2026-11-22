@@ -136,6 +136,7 @@ export function ItemProps({ items }: { items: Item[] }): ReactElement {
               label="Width to walls"
               value={item.fit?.width === 'walls'}
               onChange={(v) => setFit('width', v)}
+              hint="Fills the free stretch of this wall — it stops at doors, door swings, windows and other units."
             />
             <ToggleRow
               label="Height to ceiling"

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useId, useRef, type ReactElement } from 'react';
 import { useStore } from '../services';
 import { useNativeChange } from './useNativeChange';
 
@@ -6,6 +6,8 @@ export interface ToggleRowProps {
   label: string;
   value: boolean;
   onChange: (v: boolean) => void;
+  /** one line under the row saying what the switch actually does */
+  hint?: string;
 }
 
 /**
@@ -17,15 +19,18 @@ export interface ToggleRowProps {
  * event, but it goes through useNativeChange anyway: one commit rule, one
  * place to read it, and the eslint rule stays free of per-type exceptions.
  */
-export function ToggleRow({ label, value, onChange }: ToggleRowProps): ReactElement {
+export function ToggleRow({ label, value, onChange, hint }: ToggleRowProps): ReactElement {
   const store = useStore();
   const box = useRef<HTMLInputElement>(null);
+  const id = useId();
 
   // `defaultChecked` is a mount-only prop, so mirror later model changes (undo,
-  // an edit from elsewhere) the way useSyncedValue does for text fields
+  // an edit from elsewhere). Unlike a text field there is no half-typed value
+  // to protect, so a FOCUSED switch is synced too — otherwise Ctrl+Z right
+  // after clicking it left the switch showing the undone state.
   useEffect(() => {
     const el = box.current;
-    if (el && document.activeElement !== el) el.checked = value;
+    if (el) el.checked = value;
   });
 
   useNativeChange(box, (el) => {
@@ -33,13 +38,21 @@ export function ToggleRow({ label, value, onChange }: ToggleRowProps): ReactElem
     store.commit();
   });
 
-  return (
+  const row = (
     <div className="toggle-row">
-      <label>{label}</label>
+      {/* the text label toggles too — the switch alone is a small target */}
+      <label htmlFor={id}>{label}</label>
       <label className="switch">
-        <input type="checkbox" defaultChecked={value} ref={box} />
+        <input id={id} type="checkbox" defaultChecked={value} ref={box} />
         <span className="track"></span>
       </label>
     </div>
+  );
+  if (!hint) return row;
+  return (
+    <>
+      {row}
+      <div className="prop-hint">{hint}</div>
+    </>
   );
 }

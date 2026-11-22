@@ -315,6 +315,35 @@ describe('KeyboardController gate', () => {
     kb.dispose();
   });
 
+  it('Ctrl+Z in a COMMITTED field is document undo; in a field mid-edit it is the field’s', () => {
+    const { kb, ran } = setup();
+    const input = Object.assign(new FakeInput(), { dataset: {} as Record<string, string> });
+    kb.attach(input);
+
+    // fresh focus / after Enter: nothing typed since the last commit
+    expect(press(input, 'z', { mod: true }).defaultPrevented).toBe(true);
+    expect(ran).toEqual(['history.undo']);
+
+    // typed but not committed: the browser's own text undo keeps the key
+    input.dispatchEvent(new Event('input'));
+    expect(press(input, 'z', { mod: true }).defaultPrevented).toBe(false);
+    expect(ran).toEqual(['history.undo']);
+
+    // committed again (Enter/blur fires change)
+    input.dispatchEvent(new Event('change'));
+    press(input, 'z', { mod: true, shift: true });
+    expect(ran).toEqual(['history.undo', 'history.redo']);
+    kb.dispose();
+  });
+
+  it('only undo/redo opt into the committed-field gate', () => {
+    expect(KEY_BINDINGS.filter((b) => b.allowWhenCommitted).map((b) => b.commandId)).toEqual([
+      'history.redo',
+      'history.undo',
+      'history.redo',
+    ]);
+  });
+
   it('a digit typed into a text field types — the typing gate is untouched', () => {
     const { kb, ran } = setup();
     const input = new FakeInput();

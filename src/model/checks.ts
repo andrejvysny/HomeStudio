@@ -24,6 +24,7 @@
  * same id for the same problem.
  */
 
+import { overlappingOpenings } from './openingFit';
 import { defOfDesign, partOfDesign } from './attach';
 import {
   isDecorative,
@@ -77,7 +78,9 @@ export type CheckKind =
   | 'bedAccess'
   | 'workTriangle'
   /** two physical wall slabs running along each other instead of being one */
-  | 'parallelWalls';
+  | 'parallelWalls'
+  /** two doors/windows sharing a stretch of wall (editing prevents it; old files may not) */
+  | 'openingOverlap';
 
 /** Where to draw the highlight; a sector is just a polygon. */
 export type WarningGeom =
@@ -870,6 +873,38 @@ function parallelWallChecks(walls: RoomWall[], out: Warning[]): void {
   }
 }
 
+/**
+ * Doors and windows sharing a stretch of wall. The opening mutators keep new
+ * edits clear (openingFit.ts), so this catches files that arrive overlapping —
+ * one of the two is invisible under the other on the plan.
+ */
+function openingOverlapChecks(design: Design, walls: RoomWall[], out: Warning[]): void {
+  for (const g of walls) {
+    if (g.shared && !g.shared.owner) continue; // a partition's openings are walked once
+    for (const [a, b] of overlappingOpenings(design, g)) {
+      const oa = design.openings.find((o) => o.id === a)!;
+      const ob = design.openings.find((o) => o.id === b)!;
+      const lo = Math.max(oa.offset - oa.width / 2, ob.offset - ob.width / 2);
+      const hi = Math.min(oa.offset + oa.width / 2, ob.offset + ob.width / 2);
+      const at = (t: number): Point => ({ x: g.a.x + g.dir.x * t, y: g.a.y + g.dir.y * t });
+      out.push({
+        id: warningId('openingOverlap', [a, b]),
+        kind: 'openingOverlap',
+        severity: 'error',
+        itemIds: [],
+        openingId: a,
+        roomId: g.roomId,
+        title: `${cap(oa.type)} overlaps a ${ob.type}`,
+        detail: `They share ${fmtCm(hi - lo)} of the same wall — move or narrow one of them.`,
+        value: hi - lo,
+        geom: { kind: 'segment', a: at(lo), b: at(hi) },
+      });
+    }
+  }
+}
+
+const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function runChecks(design: Design): Warning[] {
   const shapes: Shape[] = [];
   for (const it of design.items) {
@@ -897,6 +932,7 @@ export function runChecks(design: Design): Warning[] {
   overlapChecks(shapes, found);
   throughWallChecks(shapes, byRoom, found);
   doorChecks(design, shapes, walls, found);
+  openingOverlapChecks(design, walls, found);
   passageChecks(passageFaces(design, shapes, wallFaces, work), found);
   frontChecks(design, shapes, wallFacesOf, work, found);
   parallelWallChecks(designWalls(design.rooms, design.walls), found);

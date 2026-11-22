@@ -210,7 +210,7 @@ const WALL_SELECTED: readonly ContractEntry[] = [
 const OPENING_SELECTED: readonly ContractEntry[] = [
   vis('#props-inner .props-title'),
   vis('#props-inner .props-sub'),
-  vis('#props-inner .prop-row'), // Width, Height, From corner
+  vis('#props-inner .prop-row'), // Width, Height, Gap left, Gap right
   vis('input[data-cls="opening-off"]'),
   vis('#props-inner .btn-row'), // hinge/swing choice rows + Delete
 ];
@@ -571,9 +571,20 @@ test('DOM contract: selector table stays present across every pinned app state',
       kp.plan.setViewport({ zoom: 60, panX: 120, panY: 120 });
       const v = kp.plan.viewport();
       const g = kp.store.allWalls()[0];
+      // a bare stretch of wall: a door or window has a menu of its own now
+      const spans = kp.store.design.openings
+        .filter((o) => o.wallId === g.id || o.wallId === g.shared?.wallId)
+        .map((o) => {
+          const c = o.wallId === g.id ? o.offset : g.len - o.offset;
+          return [c - o.width / 2 - 0.1, c + o.width / 2 + 0.1];
+        });
+      const t =
+        [0.5, 0.2, 0.8, 0.1, 0.9]
+          .map((f) => f * g.len)
+          .find((x) => spans.every(([lo, hi]) => x < lo || x > hi)) ?? g.len / 2;
       const off = g.faceOffset - g.thickness / 2;
-      const wx = g.a.x + g.dir.x * (g.len / 2) + g.inward.x * off;
-      const wy = g.a.y + g.dir.y * (g.len / 2) + g.inward.y * off;
+      const wx = g.a.x + g.dir.x * t + g.inward.x * off;
+      const wy = g.a.y + g.dir.y * t + g.inward.y * off;
       return { x: wx * v.zoom + v.panX, y: wy * v.zoom + v.panY };
     });
     const box = (await app.locator('#canvas2d').boundingBox())!;

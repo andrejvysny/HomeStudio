@@ -152,3 +152,29 @@ describe('contextMenu — the entries themselves', () => {
     }
   });
 });
+
+describe('a door or window has its OWN menu, not its wall’s', () => {
+  const hit: ContextHit = { kind: 'opening', openingId: 'o1', wallId: 'w1', t: 1 };
+  const ids = (type: 'door' | 'window'): string[] =>
+    contextMenu(hit, 'plan', opts({ openingType: type })).map((e) => e.id);
+
+  it('a door can flip, change type and be deleted', () => {
+    expect(ids('door')).toEqual([
+      'flip-hinge',
+      'flip-swing',
+      'opening-type',
+      'add-corner',
+      'delete-opening',
+    ]);
+  });
+
+  it('a window has no swing to flip', () => {
+    expect(ids('window')).toEqual(['opening-type', 'add-corner', 'delete-opening']);
+  });
+
+  it('delete is last and red', () => {
+    const menu = contextMenu(hit, 'furnish', opts({ openingType: 'door' }));
+    const last = menu[menu.length - 1];
+    expect(last).toMatchObject({ id: 'delete-opening', danger: true });
+  });
+});

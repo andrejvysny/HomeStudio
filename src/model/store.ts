@@ -41,6 +41,13 @@ import {
   wallsOf,
   type RoomWall,
 } from './rooms';
+import { fitCentre, fitResize, freeGaps, occupiedSpans } from './openingFit';
+import {
+  anchoredResizeShift,
+  applyWallAnchors,
+  captureWallAnchors,
+  type WallAnchor,
+} from './wallFollow';
 import { SUN_ELEV_MAX, SUN_ELEV_MIN } from './sky';
 import type {
   Attachment,
@@ -82,8 +89,12 @@ export { DESIGN_VERSION };
 type EventMap = {
   change: ChangeInfo;
   history: void;
-  /** the whole design was swapped wholesale (undo/redo restore, file load, New) */
-  reset: void;
+  /**
+   * the whole design was swapped wholesale. `restore` = undo/redo (the same
+   * document, so a selection that still resolves survives); `replace` = file
+   * load / New / demo (a different document, history starts over).
+   */
+  reset: { kind: 'restore' | 'replace' };
   /** ephemeral open-front poses changed — apply without rebuild */
   pose: void;
   /** the room subsequent edits target changed — ephemeral, never serialized */
@@ -292,7 +303,7 @@ export class Store {
     this.design = normalizeDesign(JSON.parse(json));
     this.lastCommitted = json;
     this.revalidateActiveRoom();
-    this.emit('reset', undefined); // selection lives in the editor now; it listens
+    this.emit('reset', { kind: 'restore' }); // selection lives in the editor now; it listens
     this.openFronts.clear(); // stale poses must not survive an undo/redo design swap
     this.saveSharedLibrary(); // undoing a part fork/save must not orphan it in the library
     this.autosave();
@@ -300,13 +311,19 @@ export class Store {
     this.emit('history', undefined);
   }
 
+  /**
+   * Swap in a different document (file load, New, demo). History starts over:
+   * undoing "past" a load used to restore the previous (often empty) design,
+   * and autosave then persisted that, so a few Ctrl+Z presses destroyed the
+   * loaded plan for good.
+   */
   replaceDesign(design: Design): void {
-    this.undoStack.push(JSON.stringify(this.design));
+    this.undoStack = [];
     this.redoStack = [];
     this.design = normalizeDesign(design);
     this.lastCommitted = JSON.stringify(this.design);
     this.revalidateActiveRoom();
-    this.emit('reset', undefined); // selection lives in the editor now; it listens
+    this.emit('reset', { kind: 'replace' }); // selection lives in the editor now; it listens
     this.openFronts.clear(); // stale poses must not leak across designs
     this.saveSharedLibrary();
     this.autosave();
@@ -1007,20 +1024,53 @@ export class Store {
    * calls this before its own notify, so putting `syncDerived` here covers all
    * of them for free — a fitted item's wall may have just moved.
    */
-  private renormalizeRoom(roomId: string): void {
-    const room = roomById(this.design.rooms, roomId);
-    if (room) normalizeRoom(this.design, room);
+  private renormalizeRoom(roomId: string, anchors?: WallAnchor[], also: string[] = []): void {
+    for (const id of [roomId, ...also]) {
+      const room = roomById(this.design.rooms, id);
+      if (room) normalizeRoom(this.design, room);
+    }
+    // wall-mounted items ride the edited walls (wallFollow.ts) — before the
+    // fits, which re-measure from wherever the items now stand
+    if (anchors) applyWallAnchors(this.design, anchors);
     this.clampAllOpenings();
     this.syncDerived();
+  }
+
+  /**
+   * The same physical corner as seen from the OTHER rooms (a partition end is
+   * one corner per ring, bit-identical). Moving one without the others is
+   * what tore partitions apart on a corner drag or a wall-length edit.
+   */
+  private coincidentCorners(roomId: string, p: Point): { roomId: string; corner: Corner }[] {
+    const out: { roomId: string; corner: Corner }[] = [];
+    for (const r of this.design.rooms) {
+      if (r.id === roomId) continue;
+      for (const k of r.corners) {
+        if (Math.abs(k.x - p.x) < SHARE_EPS && Math.abs(k.y - p.y) < SHARE_EPS) {
+          out.push({ roomId: r.id, corner: k });
+        }
+      }
+    }
+    return out;
   }
 
   moveCorner(id: string, x: number, y: number, transient = true): void {
     const room = roomOfCorner(this.design.rooms, id);
     const c = room?.corners.find((k) => k.id === id);
     if (!room || !c) return;
+    const anchors = captureWallAnchors(this.design);
+    const linked = this.coincidentCorners(room.id, c);
     c.x = x;
     c.y = y;
-    this.renormalizeRoom(room.id);
+    for (const l of linked) {
+      l.corner.x = x;
+      l.corner.y = y;
+    }
+    this.renormalizeRoom(
+      room.id,
+      anchors,
+      linked.map((l) => l.roomId)
+    );
     this.notify({ structural: true, transient });
   }
 
@@ -1120,26 +1170,23 @@ export class Store {
     const c = room.corners;
     const startIdx = c.findIndex((k) => k.id === wallId);
     if (startIdx < 0) return;
-    // move corner b, then keep moving subsequent corners while the ORIGINAL
-    // edges stay perpendicular to the edited wall — so orthogonal rooms keep
-    // their shape (a rectangle stays a rectangle when one side is resized)
-    const original = c.map((k) => ({ x: k.x, y: k.y }));
-    let i = (startIdx + 1) % c.length;
-    let moved = 0;
-    while (moved < c.length - 1) {
-      c[i].x += dx;
-      c[i].y += dy;
-      moved++;
-      const ni = (i + 1) % c.length;
-      if (c[ni].id === wallId) break; // never wrap all the way around
-      const ex = original[ni].x - original[i].x;
-      const ey = original[ni].y - original[i].y;
-      const elen = Math.hypot(ex, ey) || 1;
-      const dot = Math.abs((ex / elen) * g.dir.x + (ey / elen) * g.dir.y);
-      if (dot > 0.05) break; // next edge not perpendicular — stop propagating
-      i = ni;
+    const anchors = captureWallAnchors(this.design);
+    const moved = wallEndRun(
+      this.design.rooms,
+      room.id,
+      c[(startIdx + 1) % c.length].id,
+      g.a,
+      g.dir
+    );
+    for (const k of moved.corners) {
+      k.x += dx;
+      k.y += dy;
     }
-    this.renormalizeRoom(room.id);
+    this.renormalizeRoom(
+      room.id,
+      anchors,
+      [...moved.roomIds].filter((id) => id !== room.id)
+    );
     this.notify({ structural: true });
   }
 
@@ -1185,21 +1232,50 @@ export class Store {
   /* ---------------- opening mutations ---------------- */
 
   addOpening(def: CatalogDef, wallId: string, offset: number): Opening {
-    // a partition's openings live on the owning side, so both rooms see one door
-    const owner = this.ownerWall(wallId);
+    // a partition's openings live on the owning side, so both rooms see one
+    // door — and the offset the caller measured along ITS side is mirrored
+    const at = this.toOwnerFrame(wallId, offset);
     const o: Opening = {
       id: uid('o'),
-      wallId: owner?.id ?? wallId,
+      wallId: at.wallId,
       type: def.kind === 'door' ? 'door' : 'window',
-      offset,
+      offset: at.offset,
       width: def.w,
       height: def.h,
       sill: def.kind === 'door' ? 0 : def.elevation,
     };
+    // slide clear of a neighbour when it fits; a wall with no room left keeps
+    // the overlap (callers that can refuse ask `openingSlot` first)
+    const slot = this.openingSlot(o.wallId, o.offset, o.width);
+    if (slot !== null) o.offset = slot;
     this.design.openings.push(o);
     this.clampOpening(o);
     this.notify({ structural: true });
     return o;
+  }
+
+  /**
+   * Where an opening of `width` aimed at `offset` on `wallId` would land
+   * without overlapping another opening, or null when that wall has no gap
+   * wide enough. Placement uses it to refuse an occupied wall up front.
+   */
+  openingSlot(wallId: string, offset: number, width: number, exceptId?: string): number | null {
+    // measured along the wall the caller named; openingsOfWall mirrors the twin in
+    const g = this.wallById(wallId);
+    if (!g) return null;
+    return fitCentre(freeGaps(g.len, occupiedSpans(this.design, g, exceptId)), width, offset);
+  }
+
+  /**
+   * (wallId, offset) as seen from one side of a wall → the stored frame. A
+   * partition stores its openings on the OWNER side; a position measured
+   * along the twin runs the other way, so it is mirrored.
+   */
+  private toOwnerFrame(wallId: string, offset: number): { wallId: string; offset: number } {
+    const w = this.wallById(wallId);
+    const owner = this.ownerWall(wallId);
+    if (!w || !owner || owner.id === w.id) return { wallId, offset };
+    return { wallId: owner.id, offset: w.len - offset };
   }
 
   updateOpening(
@@ -1209,10 +1285,36 @@ export class Store {
   ): void {
     const o = this.openingById(id);
     if (!o) return;
+    const prev = { wallId: o.wallId, offset: o.offset };
     Object.assign(o, patch);
-    if (patch.wallId) o.wallId = this.ownerWall(patch.wallId)?.id ?? patch.wallId;
+    if (patch.wallId) Object.assign(o, this.toOwnerFrame(patch.wallId, o.offset));
+    if (patch.width !== undefined || patch.offset !== undefined || patch.wallId) {
+      this.keepClearOfNeighbours(o, prev, patch.width !== undefined && patch.offset === undefined);
+    }
     this.clampOpening(o);
     this.notify(info);
+  }
+
+  /**
+   * Openings never overlap (openingFit.ts). A resize grows toward the free
+   * side and stops at the neighbour; a move hops to the nearest free spot, and
+   * stays where it was when the target wall has no gap wide enough.
+   */
+  private keepClearOfNeighbours(
+    o: Opening,
+    prev: { wallId: string; offset: number },
+    resized: boolean
+  ): void {
+    const g = this.wallById(o.wallId);
+    if (!g) return;
+    const gaps = freeGaps(g.len, occupiedSpans(this.design, g, o.id));
+    if (resized) {
+      Object.assign(o, fitResize(gaps, o.width, o.offset));
+      return;
+    }
+    const c = fitCentre(gaps, o.width, o.offset);
+    if (c !== null) o.offset = c;
+    else Object.assign(o, prev);
   }
 
   deleteOpening(id: string): void {
@@ -1249,6 +1351,38 @@ export class Store {
   }
 
   addItem(def: CatalogDef, x: number, y: number, rotation = 0): Item {
+    const item = this.makeItem(def, x, y, rotation);
+    this.design.items.push(item);
+    this.syncDerived();
+    this.notify({ structural: true });
+    return item;
+  }
+
+  /**
+   * What the spatial checks would say about `def` placed at this pose, without
+   * placing it: 'error' (collision / through a wall), 'warn' (clearance — a
+   * door swing, a tight walkway) or null. The placement ghost colours itself
+   * by it, so a bad spot is visible BEFORE the click instead of after.
+   */
+  ghostVerdict(
+    def: CatalogDef,
+    x: number,
+    y: number,
+    rotation: number,
+    w?: number
+  ): 'error' | 'warn' | null {
+    const ghost = { ...this.makeItem(def, x, y, rotation), id: '__ghost__' };
+    if (w !== undefined) ghost.w = w;
+    let worst: 'warn' | null = null;
+    for (const v of runChecks({ ...this.design, items: [...this.design.items, ghost] })) {
+      if (!v.itemIds.includes(ghost.id)) continue;
+      if (v.severity === 'error') return 'error';
+      if (v.severity === 'warn') worst = 'warn';
+    }
+    return worst;
+  }
+
+  private makeItem(def: CatalogDef, x: number, y: number, rotation: number): Item {
     const item: Item = {
       id: uid('i'),
       defId: def.id,
@@ -1283,9 +1417,6 @@ export class Store {
     if (defaultAccentVar && part && this.variableById(defaultAccentVar)) {
       item.accentColor = toVarRef(defaultAccentVar);
     }
-    this.design.items.push(item);
-    this.syncDerived();
-    this.notify({ structural: true });
     return item;
   }
 
@@ -1621,7 +1752,16 @@ export class Store {
       if ('h' in patch) delete it.fit.height;
       if (!it.fit.width && !it.fit.height) delete it.fit;
     }
+    // a width typed on a unit against a wall keeps its touching edge put
+    const shift =
+      patch.w !== undefined && !('x' in patch) && !('y' in patch) && !it.attach && !info.transient
+        ? anchoredResizeShift(this.design, it, patch.w)
+        : null;
     Object.assign(it, patch);
+    if (shift) {
+      it.x += shift.x;
+      it.y += shift.y;
+    }
     const touchesPose = ['x', 'y', 'rotation', 'elevation', 'w', 'd', 'h'].some((k) => k in patch);
     if (touchesPose) {
       // moving an ATTACHED item re-anchors it on its host (world → host-local)
@@ -2691,4 +2831,60 @@ export function demoDesign(): Design {
   syncFits(demo); // no-op today — no demo item carries `fit`
   syncAttachments(demo); // settle the sink/hob poses onto their hosts
   return demo;
+}
+
+/**
+ * The corners a wall-length edit translates: the wall's END corner, then every
+ * corner reachable from it along an ORIGINAL edge perpendicular to the wall
+ * (those edges slide along it, so rectangles stay rectangles), across rooms —
+ * a partition end is one corner per ring and moves in all of them. The wall's
+ * start point never moves, so the edit cannot cancel itself by wrapping round.
+ */
+function wallEndRun(
+  rooms: Room[],
+  roomId: string,
+  endCornerId: string,
+  start: Point,
+  dir: Point
+): { corners: Corner[]; roomIds: Set<string> } {
+  const at = (p: Point, q: Point): boolean =>
+    Math.abs(p.x - q.x) < SHARE_EPS && Math.abs(p.y - q.y) < SHARE_EPS;
+  const perpendicular = (p: Point, q: Point): boolean => {
+    const ex = q.x - p.x;
+    const ey = q.y - p.y;
+    const l = Math.hypot(ex, ey) || 1;
+    return Math.abs((ex / l) * dir.x + (ey / l) * dir.y) <= 0.05;
+  };
+  const seen = new Set<string>();
+  const corners: Corner[] = [];
+  const roomIds = new Set<string>();
+  const queue: { room: Room; idx: number }[] = [];
+  const push = (room: Room, idx: number): void => {
+    const k = room.corners[idx];
+    if (seen.has(k.id) || at(k, start)) return;
+    seen.add(k.id);
+    corners.push(k);
+    roomIds.add(room.id);
+    queue.push({ room, idx });
+  };
+  const host = rooms.find((r) => r.id === roomId);
+  const endIdx = host ? host.corners.findIndex((k) => k.id === endCornerId) : -1;
+  if (!host || endIdx < 0) return { corners, roomIds };
+  push(host, endIdx);
+  // positions are read BEFORE anything moves: the caller translates afterwards
+  while (queue.length) {
+    const { room, idx } = queue.shift()!;
+    const k = room.corners[idx];
+    for (const r of rooms) {
+      if (r.id === room.id) continue;
+      r.corners.forEach((o, i) => {
+        if (at(o, k)) push(r, i);
+      });
+    }
+    const n = room.corners.length;
+    for (const j of [(idx + 1) % n, (idx - 1 + n) % n]) {
+      if (perpendicular(k, room.corners[j])) push(room, j);
+    }
+  }
+  return { corners, roomIds };
 }

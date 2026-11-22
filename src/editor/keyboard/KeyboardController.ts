@@ -47,6 +47,10 @@ export class KeyboardController {
     target.addEventListener('keydown', this.onKeyDown as EventListener, {
       signal: this.ac.signal,
     });
+    // capture phase: a field's own handlers may stop propagation
+    target.addEventListener('input', markDirty, { signal: this.ac.signal, capture: true });
+    target.addEventListener('change', markClean, { signal: this.ac.signal, capture: true });
+    target.addEventListener('focusin', markClean, { signal: this.ac.signal, capture: true });
   }
 
   /** Release the listener; idempotent. */
@@ -74,8 +78,14 @@ export class KeyboardController {
     // ring is in flight, the selection at rest). The typing gate is evaluated
     // PER candidate for the same reason: a blocked row must not hide the one
     // below it.
+    const typing = isTyping(e.target);
     for (const binding of candidates) {
-      if (!binding.allowWhileTyping && isTyping(e.target)) continue;
+      if (typing && !binding.allowWhileTyping) {
+        if (!binding.allowWhenCommitted || isDirty(e.target)) continue;
+        // the field keeps its text while focused (useSyncedValue never writes
+        // into the active element), so it must let go before the model moves
+        (e.target as Partial<HTMLElement>).blur?.();
+      }
 
       // preventDefault only on a command that actually ran, so a binding whose
       // canExecute says no still reaches the browser (Ctrl+D with no selection)
@@ -86,10 +96,42 @@ export class KeyboardController {
   };
 }
 
+/** input types that are not text entry: a focused toggle or slider must not eat R / Delete */
+const NON_TEXT_INPUTS = new Set([
+  'checkbox',
+  'radio',
+  'range',
+  'button',
+  'submit',
+  'color',
+  'file',
+]);
+
 function isTyping(target: EventTarget | null): boolean {
   return (
-    target instanceof HTMLInputElement ||
+    (target instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(target.type)) ||
     target instanceof HTMLTextAreaElement ||
     (target instanceof HTMLElement && target.isContentEditable)
   );
+}
+
+const DIRTY = 'kpDirty';
+
+function datasetOf(target: EventTarget | null): DOMStringMap | undefined {
+  return (target as Partial<HTMLElement> | null)?.dataset;
+}
+
+function markDirty(e: Event): void {
+  const ds = datasetOf(e.target);
+  if (ds) ds[DIRTY] = '1';
+}
+
+function markClean(e: Event): void {
+  const ds = datasetOf(e.target);
+  if (ds) delete ds[DIRTY];
+}
+
+/** typed into since its last commit (or since it took focus) */
+function isDirty(target: EventTarget | null): boolean {
+  return datasetOf(target)?.[DIRTY] === '1';
 }

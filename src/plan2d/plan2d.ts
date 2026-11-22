@@ -124,6 +124,9 @@ type Drag =
       ox: number;
       oy: number;
       moved: boolean;
+      /** item position at the first move — Shift locks the drag to an axis through it */
+      x0?: number;
+      y0?: number;
       cycleTo?: string | null;
       /**
        * Multi-move: where the dragged item and its followers STARTED. The
@@ -144,7 +147,8 @@ type Drag =
        */
       surfaces?: readonly Surface[];
     }
-  | { type: 'corner'; id: string }
+  /** `from` = where the corner stood at press: the reference for the axis lock */
+  | { type: 'corner'; id: string; from?: Point }
   | { type: 'opening'; id: string }
   | { type: 'rotate'; id: string }
   /**
@@ -475,7 +479,10 @@ export class Plan2D {
       this.store.on('activeRoom', () => {
         this.updateHint();
         this.requestDraw();
-      })
+      }),
+      // a loaded / new / undone design can change what the idle hint should
+      // say ("start with a room" vs "click a room") with no selection change
+      this.store.on('reset', () => this.updateHint())
     );
 
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e), { signal });
@@ -594,13 +601,21 @@ export class Plan2D {
     if (!c.length) return;
     const xs = c.map((p) => p.x);
     const ys = c.map((p) => p.y);
-    const minX = Math.min(...xs) - 0.9;
-    const maxX = Math.max(...xs) + 0.9;
-    const minY = Math.min(...ys) - 0.9;
-    const maxY = Math.max(...ys) + 0.9;
-    this.zoom = clamp(Math.min(this.cssW / (maxX - minX), this.cssH / (maxY - minY)), 15, 300);
-    this.panX = this.cssW / 2 - ((minX + maxX) / 2) * this.zoom;
-    this.panY = this.cssH / 2 - ((minY + maxY) / 2) * this.zoom;
+    // world margin for exterior slabs and dimension labels…
+    const minX = Math.min(...xs) - 0.6;
+    const maxX = Math.max(...xs) + 0.6;
+    const minY = Math.min(...ys) - 0.6;
+    const maxY = Math.max(...ys) + 0.6;
+    // …plus SCREEN insets for the floating controls (2D/3D switch on top, view
+    // and zoom toolbars at the bottom), which used to cover the top wall
+    const side = Math.min(32, this.cssW * 0.05);
+    const top = Math.min(64, this.cssH * 0.12);
+    const bottom = Math.min(64, this.cssH * 0.12);
+    const availW = Math.max(1, this.cssW - 2 * side);
+    const availH = Math.max(1, this.cssH - top - bottom);
+    this.zoom = clamp(Math.min(availW / (maxX - minX), availH / (maxY - minY)), 15, 300);
+    this.panX = side + availW / 2 - ((minX + maxX) / 2) * this.zoom;
+    this.panY = top + availH / 2 - ((minY + maxY) / 2) * this.zoom;
     this.requestDraw();
   }
 
@@ -1746,7 +1761,7 @@ export class Plan2D {
           const hostLabel = host ? this.store.defOf(host.defId).label : '?';
           hint = `Mounted on ${hostLabel} — position follows it · Detach in the inspector`;
         } else {
-          hint = 'Drag to move';
+          hint = 'Drag to move (hold Shift while dragging to keep to one axis)';
         }
         if (it && this.hasItemBeneath(it)) hint += ' · click again: select the item beneath';
         hint += ' · Shift-click adds another · R rotates · arrows nudge · Delete removes';
@@ -1754,7 +1769,9 @@ export class Plan2D {
         break;
       }
       case 'corner':
-        this.onHint('Drag the corner to reshape the room · Delete removes it');
+        this.onHint(
+          'Drag the corner to reshape the room — it keeps to one axis, Shift drags freely · Delete removes it'
+        );
         break;
       case 'wall':
         this.onHint(
@@ -1762,13 +1779,17 @@ export class Plan2D {
         );
         break;
       case 'opening':
-        this.onHint('Drag to slide along the wall · size it in the panel · Delete removes');
+        this.onHint(
+          'Drag to slide along the wall (it stops at other openings) · right-click to flip or change type · Delete removes'
+        );
         break;
       default:
         this.onHint(
-          this.store.design.rooms.length > 1
-            ? 'Click a room to work in it · drag empty space to select several · scroll zooms, right-drag pans'
-            : 'Drag corners to reshape the room · drag empty space to select several · scroll zooms, right-drag pans'
+          this.store.design.rooms.length === 0
+            ? 'Start with a room: pick “Draw a room”, then drag a rectangle or click corner by corner'
+            : this.store.design.rooms.length > 1
+              ? 'Click a room to work in it · drag empty space to select several · scroll zooms, right-drag pans'
+              : 'Drag corners to reshape the room · drag empty space to select several · scroll zooms, right-drag pans'
         );
     }
   }
@@ -2024,7 +2045,12 @@ export class Plan2D {
     if (wallId) {
       const g = this.store.wallById(wallId);
       // an opening can outlive its wall for one notify; fall through if so
-      if (g) return { kind: 'wall', wallId, t: clamp(projectOnWall(g, w).t, 0, g.len) };
+      if (g) {
+        const t = clamp(projectOnWall(g, w).t, 0, g.len);
+        return opening
+          ? { kind: 'opening', openingId: opening.id, wallId, t }
+          : { kind: 'wall', wallId, t };
+      }
     }
 
     const roomId = this.hitRoom(w);
@@ -2098,7 +2124,8 @@ export class Plan2D {
     const cornerId = this.hitCorner(s);
     if (cornerId) {
       this.editor.select({ kind: 'corner', id: cornerId });
-      this.drag = { type: 'corner', id: cornerId };
+      const at = this.store.cornerById(cornerId);
+      this.drag = { type: 'corner', id: cornerId, from: at && { x: at.x, y: at.y } };
       return;
     }
     const rotId = this.hitRotateHandle(s);
@@ -2321,6 +2348,10 @@ export class Plan2D {
     if (def.opening) {
       const near = nearestWall(this.store, w, 0.6);
       if (!near) return;
+      if (this.store.openingSlot(near.wall.id, near.t, def.w) === null) {
+        this.onHint(`No room for a ${def.label.toLowerCase()} here — openings cannot overlap`);
+        return;
+      }
       const o = this.store.addOpening(def, near.wall.id, near.t);
       this.editor.select({ kind: 'opening', id: o.id });
       this.store.commit();
@@ -2469,7 +2500,8 @@ export class Plan2D {
         });
         this.guides = res.guides;
         this.lastSnap = res;
-        this.store.moveCorner(d.id, res.p.x, res.p.y);
+        const p = cornerAxisLock(res.p, w, d.from, e.shiftKey);
+        this.store.moveCorner(d.id, p.x, p.y);
         return;
       }
       case 'opening': {
@@ -2509,7 +2541,18 @@ export class Plan2D {
           }
           return;
         }
-        const res = snapItem(this.store, def, it.id, w.x - d.ox, w.y - d.oy, it.rotation);
+        if (d.x0 === undefined || d.y0 === undefined) {
+          d.x0 = it.x;
+          d.y0 = it.y;
+        }
+        // Shift DURING a drag locks it to the dominant axis (Shift at the press
+        // is the selection toggle, so the lock can only be a mid-drag modifier)
+        const lock = e.shiftKey ? dominantAxis(w.x - d.ox - d.x0, w.y - d.oy - d.y0) : null;
+        const tx = lock === 'y' ? d.x0 : w.x - d.ox;
+        const ty = lock === 'x' ? d.y0 : w.y - d.oy;
+        const res = snapItem(this.store, def, it.id, tx, ty, it.rotation);
+        if (lock === 'x') res.y = d.y0;
+        if (lock === 'y') res.x = d.x0;
         this.guides = res.guides;
         const rest = dropElevation(def, d.surfaces ?? [], { x: res.x, y: res.y });
         this.store.updateItem(
@@ -2600,7 +2643,12 @@ export class Plan2D {
       this.lastPointer = w;
       if (this.armedDef.opening) {
         const near = nearestWall(this.store, w, 0.6);
-        this.ghostOpening = near ? { wallId: near.wall.id, t: near.t, valid: true } : null;
+        // the ghost shows where the click will really land: slid clear of a
+        // neighbouring opening, or red when that wall has no room for it
+        const slot = near && this.store.openingSlot(near.wall.id, near.t, this.armedDef.w);
+        this.ghostOpening = near
+          ? { wallId: near.wall.id, t: slot ?? near.t, valid: slot !== null }
+          : null;
         this.clearGhosts();
       } else if (
         this.armedDef.appliance?.mount === 'counter' ||
@@ -2617,11 +2665,17 @@ export class Plan2D {
         const needWall = this.armedDef.marker || isWallMounted(this.armedDef);
         // resolves `ghostSegment` too — the band and the ghost are one answer
         const fitted = this.ghostPlacement(res, w);
+        const placeable = !needWall || !!res.wallId;
+        // the same checks the drop will raise, shown on the ghost beforehand
+        const verdict = placeable
+          ? this.store.ghostVerdict(this.armedDef, res.x, res.y, res.rotation, fitted.w)
+          : null;
         this.ghost = {
           x: res.x,
           y: res.y,
           rotation: res.rotation,
-          valid: !needWall || !!res.wallId,
+          valid: placeable && verdict !== 'error',
+          caution: verdict === 'warn',
           // adds nothing at all unless this def lands fitted (see ghostPlacement)
           ...fitted,
         };
@@ -2814,6 +2868,8 @@ export class Plan2D {
     }
     if (['corner', 'opening', 'item', 'rotate', 'underlay'].includes(wasDrag.type)) {
       this.store.commit();
+      // the drag's own hint ("keep dragging to fine-place…") is over
+      this.updateHint();
     }
     this.requestDraw();
   }
@@ -2963,4 +3019,28 @@ export class Plan2D {
   debug(): { drawCount: number; gestureCount: number; dragKind: string } {
     return { drawCount: this.drawCount, gestureCount: this.gestureCount, dragKind: this.drag.type };
   }
+}
+
+/**
+ * A corner dragged mostly along one axis moves ONLY along that axis: a snap
+ * target a few pixels off must not skew a finished wall the user never asked
+ * to tilt. Shift frees the drag for a deliberate oblique wall.
+ */
+export function cornerAxisLock(
+  snapped: Point,
+  cursor: Point,
+  from: Point | undefined,
+  free: boolean
+): Point {
+  if (!from || free) return snapped;
+  const dx = Math.abs(cursor.x - from.x);
+  const dy = Math.abs(cursor.y - from.y);
+  if (dy < dx * 0.35) return { x: snapped.x, y: from.y };
+  if (dx < dy * 0.35) return { x: from.x, y: snapped.y };
+  return snapped;
+}
+
+/** The axis a drag mostly travels along. */
+function dominantAxis(dx: number, dy: number): 'x' | 'y' {
+  return Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
 }

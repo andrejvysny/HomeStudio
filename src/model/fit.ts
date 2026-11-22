@@ -69,7 +69,7 @@ export interface FitPatch {
 /** below this a "new" value is the value the item already has */
 const EPS = 1e-6;
 
-interface Hug {
+export interface Hug {
   room: Room;
   wall: RoomWall;
   /** distance along the wall of the item's centre */
@@ -85,7 +85,7 @@ const along = (o: Point, n: Point, s: number): Point => ({ x: o.x + n.x * s, y: 
  * placed the way `snapItem` would have placed it — same facing, back on the
  * face, within the wall's own span.
  */
-function hugWall(design: Design, item: Item): Hug | null {
+export function hugWall(design: Design, item: Item): Hug | null {
   const room = roomOfItem(design, item);
   if (!room) return null;
   let best: { wall: RoomWall; t: number; err: number } | null = null;

@@ -42,6 +42,8 @@ export interface MenuOpts {
   activeRoomId: string;
   /** The hit item resolves to a cabinet or wardrobe part — fit-to-room applies. */
   itemFittable?: boolean;
+  /** The hit opening's current type (an opening hit only). */
+  openingType?: 'door' | 'window';
 }
 
 /** Workspaces whose canvases are visible; the other two are covered by a pane. */
@@ -80,6 +82,26 @@ export function contextMenu(hit: ContextHit, ws: WorkspaceId, opts: MenuOpts): M
       // entry is the one thing this menu never ships
       if (ws === 'furnish') out.push({ id: 'wall-colour', label: 'Room wall colour…' });
       return out;
+    }
+
+    case 'opening': {
+      const door = opts.openingType !== 'window';
+      return [
+        ...(door
+          ? [
+              { id: 'flip-hinge', label: 'Flip hinge side' },
+              { id: 'flip-swing', label: 'Flip opening direction' },
+            ]
+          : []),
+        { id: 'opening-type', label: door ? 'Change to window' : 'Change to door' },
+        { id: 'add-corner', label: 'Add corner on this wall here', hint: 'double-click' },
+        {
+          id: 'delete-opening',
+          label: door ? 'Delete door' : 'Delete window',
+          hint: 'Delete',
+          danger: true,
+        },
+      ];
     }
 
     case 'room': {

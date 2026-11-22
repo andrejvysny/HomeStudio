@@ -132,14 +132,16 @@ export function CoachMarks(): ReactElement | null {
   useEffect(() => {
     if (done) return;
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return;
+      const next = e.key === 'Enter' || e.key === 'ArrowRight';
+      if (e.key !== 'Escape' && !next) return;
       e.preventDefault();
       e.stopPropagation();
-      finish();
+      if (next && step + 1 < MARKS.length) setStep(step + 1);
+      else finish();
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [done, finish]);
+  }, [done, finish, step]);
 
   if (done) return null;
 
@@ -176,6 +178,18 @@ export function CoachMarks(): ReactElement | null {
               <span key={i} className={i === step ? 'coach-dot on' : 'coach-dot'} />
             ))}
           </span>
+          {step + 1 < MARKS.length && (
+            <button
+              className="coach-next"
+              type="button"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                advance();
+              }}
+            >
+              Next
+            </button>
+          )}
           <button
             className="coach-skip"
             type="button"

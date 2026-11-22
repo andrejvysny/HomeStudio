@@ -7,7 +7,7 @@ import type { EditorState } from '../editor/editorState';
 import { withoutCarried } from '../editor/selectionOps';
 import { isDecor, itemBaseY, SPOT_AIM, type CatalogDef } from '../model/catalog';
 import { restingElevation, type Surface } from '../model/surfaces';
-import { polygonCentroid, wallPoint } from '../model/geometry';
+import { distToSegment, pointInPolygon, polygonCentroid, wallPoint } from '../model/geometry';
 import { findHost } from '../model/attach';
 import { hostContexts } from '../model/worktops';
 import type { HostContext } from '../model/panels';
@@ -20,7 +20,7 @@ import {
   type RoomWall,
 } from '../model/rooms';
 import type { Store } from '../model/store';
-import type { Corner, Item, Opening, Point, RoomStyle } from '../model/types';
+import type { Corner, EntityRef, Item, Opening, Point, RoomStyle } from '../model/types';
 import { AMBIENT_DAY, skyState } from '../model/sky';
 import { resolveFinish } from '../model/variables';
 import { buildItemGroup, lightLocalY, shade } from './itemMeshes';
@@ -154,6 +154,7 @@ export class View3D {
   private controls!: OrbitControls;
   private gizmo!: TransformControls;
   private raycaster = new THREE.Raycaster();
+  private readonly onHint: (text: string) => void;
 
   private roomGroup = new THREE.Group();
   private itemsGroup = new THREE.Group();
@@ -243,10 +244,13 @@ export class View3D {
       clearArmed: () => void;
       /** the selection lives here since M18 — the view reads and writes it */
       editor: EditorState;
+      /** status-bar feedback for a refused 3D gesture */
+      onHint?: (text: string) => void;
     }
   ) {
     this.store = store;
     this.editor = opts.editor;
+    this.onHint = opts.onHint ?? ((): void => {});
     this.getArmed = opts.getArmed;
     this.clearArmed = opts.clearArmed;
 
@@ -580,11 +584,12 @@ export class View3D {
         // step into the ACTIVE room, not the centroid of the whole design
         const room = this.store.activeRoom();
         if (!room) break;
-        const rc = room.corners;
-        const ci = polygonCentroid(rc);
-        const ry = rc.map((k) => k.y);
-        const rSpanY = Math.max(Math.max(...ry) - Math.min(...ry), 1.5);
-        set(ci.x + 0.4, 1.55, ci.y + rSpanY * 0.28, ci.x, 1.25, ci.y - rSpanY * 0.6);
+        // The centroid of an L- or corridor-shaped room can sit in (or behind)
+        // a wall, which is how this preset used to open on a flat grey slab.
+        // Stand at the most open spot instead, at eye height, looking down the
+        // room's longest clear line of sight.
+        const view = insideView(room.corners);
+        set(view.eye.x, 1.6, view.eye.y, view.look.x, 1.35, view.look.y);
         break;
       }
     }
@@ -767,6 +772,7 @@ export class View3D {
 
     const group = new THREE.Group();
     group.name = `Wall_${idx}`;
+    group.userData.wallId = g.id; // 3D placement of openings aims at it
     group.position.set(g.a.x, 0, g.a.y);
     group.rotation.y = -g.angle;
 
@@ -886,6 +892,7 @@ export class View3D {
     );
     const g = new THREE.Group();
     g.position.set(o.offset, 0, zc);
+    g.userData.openingId = o.id; // selectable in 3D, like an item
 
     const fw = 0.05; // frame width
     const frame = (w: number, h: number, x: number, y: number) => {
@@ -1390,14 +1397,52 @@ export class View3D {
    * can never disagree with what a left-click would have selected.
    */
   pickItem(e: MouseEvent): Item | null {
-    const ray = this.pointerRay(e);
-    const hits = ray.intersectObjects(this.itemsGroup.children, true);
-    for (const h of hits) {
-      let o: THREE.Object3D | null = h.object;
-      while (o && !o.userData.itemId) o = o.parent;
-      if (o?.userData.itemId) return this.store.itemById(o.userData.itemId) ?? null;
+    const ref = this.pickEntity(e);
+    return ref?.kind === 'item' ? (this.store.itemById(ref.id) ?? null) : null;
+  }
+
+  /**
+   * The item or opening under the pointer. Walls, floors and ceilings are in
+   * the same ray, so the NEAREST VISIBLE surface wins: a click can never
+   * select a wardrobe hidden behind the wall the user is looking at.
+   */
+  pickEntity(e: MouseEvent): EntityRef | null {
+    const hit = this.firstVisibleHit(e);
+    if (!hit) return null;
+    let o: THREE.Object3D | null = hit.object;
+    while (o && !o.userData.itemId && !o.userData.openingId) o = o.parent;
+    if (o?.userData.itemId && this.store.itemById(o.userData.itemId as string)) {
+      return { kind: 'item', id: o.userData.itemId as string };
     }
-    return null;
+    if (o?.userData.openingId) return { kind: 'opening', id: o.userData.openingId as string };
+    return null; // a wall, floor or ceiling is in front
+  }
+
+  private firstVisibleHit(e: MouseEvent): THREE.Intersection | null {
+    const ray = this.pointerRay(e);
+    const hits = ray.intersectObjects([this.roomGroup, this.itemsGroup], true);
+    return hits.find((h) => isShown(h.object)) ?? null;
+  }
+
+  /** Armed door/window in 3D: drop it where the ray meets a wall. */
+  private placeOpeningAt(e: PointerEvent, def: CatalogDef): void {
+    const hit = this.firstVisibleHit(e);
+    let o: THREE.Object3D | null = hit?.object ?? null;
+    while (o && !o.userData.wallId) o = o.parent;
+    const wall = o ? this.store.wallById(o.userData.wallId as string) : undefined;
+    if (!hit || !wall) {
+      this.onHint(`Click on a wall to place the ${def.label.toLowerCase()}`);
+      return;
+    }
+    const t = (hit.point.x - wall.a.x) * wall.dir.x + (hit.point.z - wall.a.y) * wall.dir.y;
+    if (this.store.openingSlot(wall.id, t, def.w) === null) {
+      this.onHint(`No room for a ${def.label.toLowerCase()} here — openings cannot overlap`);
+      return;
+    }
+    const added = this.store.addOpening(def, wall.id, t);
+    this.editor.select({ kind: 'opening', id: added.id });
+    this.store.commit();
+    if (!e.shiftKey) this.clearArmed();
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -1439,7 +1484,17 @@ export class View3D {
       return;
     }
 
-    const item = this.pickItem(e);
+    if (armed?.opening) {
+      this.placeOpeningAt(e, armed);
+      return;
+    }
+
+    const ent = this.pickEntity(e);
+    if (ent?.kind === 'opening') {
+      this.editor.select(ent);
+      return;
+    }
+    const item = ent ? (this.store.itemById(ent.id) ?? null) : null;
     if (!item) return; // empty space: OrbitControls orbits, pointerup deselects
 
     // Direct manipulation: dragging the body of the item that is ALREADY
@@ -1542,7 +1597,7 @@ export class View3D {
       e.button === 0 &&
       this.downPos.distanceTo(this.curPos.set(e.clientX, e.clientY)) < CLICK_SLOP_PX
     ) {
-      if (!this.pickItem(e)) this.editor.select({ kind: 'none' });
+      if (!this.pickEntity(e)) this.editor.select({ kind: 'none' });
     }
   }
 
@@ -1815,3 +1870,62 @@ export class View3D {
 }
 
 export { shade };
+
+/** Drawn on screen: the object and every ancestor visible (wall hiding toggles groups). */
+function isShown(o: THREE.Object3D | null): boolean {
+  for (let n = o; n; n = n.parent) if (!n.visible) return false;
+  return true;
+}
+
+/**
+ * Where to stand inside a room polygon: the sampled interior point farthest
+ * from every wall, and a target along the direction with the longest clear
+ * run to a wall from there. Pure; good enough for any ring a user can draw.
+ */
+export function insideView(ring: Point[]): { eye: Point; look: Point } {
+  const xs = ring.map((p) => p.x);
+  const ys = ring.map((p) => p.y);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const clearance = (p: Point): number => {
+    let d = Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      d = Math.min(d, distToSegment(p, ring[i], ring[(i + 1) % ring.length]));
+    }
+    return d;
+  };
+  let eye = polygonCentroid(ring);
+  let best = pointInPolygon(eye, ring) ? clearance(eye) : -1;
+  const N = 24;
+  for (let i = 0; i <= N; i++) {
+    for (let j = 0; j <= N; j++) {
+      const p = { x: x0 + ((x1 - x0) * i) / N, y: y0 + ((y1 - y0) * j) / N };
+      if (!pointInPolygon(p, ring)) continue;
+      const c = clearance(p);
+      if (c > best) {
+        best = c;
+        eye = p;
+      }
+    }
+  }
+  // longest clear ray from the eye, probed in 16 directions
+  let look = { x: eye.x, y: eye.y - 1 };
+  let far = -1;
+  for (let k = 0; k < 16; k++) {
+    const a = (k / 16) * Math.PI * 2;
+    const dir = { x: Math.cos(a), y: Math.sin(a) };
+    let reach = 0;
+    for (let r = 0.25; r < 30; r += 0.25) {
+      if (!pointInPolygon({ x: eye.x + dir.x * r, y: eye.y + dir.y * r }, ring)) break;
+      reach = r;
+    }
+    if (reach > far) {
+      far = reach;
+      look = { x: eye.x + dir.x * Math.max(1, reach), y: eye.y + dir.y * Math.max(1, reach) };
+    }
+  }
+  // step back from the target a little so more of the room is in frame
+  const back = Math.min(best * 0.8, 1.2);
+  const len = Math.hypot(look.x - eye.x, look.y - eye.y) || 1;
+  eye = { x: eye.x - ((look.x - eye.x) / len) * back, y: eye.y - ((look.y - eye.y) / len) * back };
+  return { eye, look };
+}

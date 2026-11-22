@@ -161,6 +161,8 @@ export interface ItemGhost {
   y: number;
   rotation: number;
   valid: boolean;
+  /** valid, but the drop would raise a clearance warning — drawn amber */
+  caution?: boolean;
   /**
    * Stretched width for a ghost that will land FITTED — a wardrobe against a
    * wall, which `store.addItem` seeds `fit.width` on, so the plan has to
@@ -651,7 +653,7 @@ export function renderPlan(
     // a fitted ghost draws at the width it will BE, not the width it came at
     const gw = ghost.w ?? armed.w;
     drawPlanSymbol(ctx, armed.kind, gw, armed.d, {
-      color: ghost.valid ? armed.color : '#d66',
+      color: !ghost.valid ? '#d66' : ghost.caution ? '#e0a030' : armed.color,
       selected: false,
       pxPerM: zoom,
       footprint: armedPart ? (footprintPolygon(armedPart, gw, armed.d) ?? undefined) : undefined,
@@ -774,6 +776,12 @@ export function renderPlan(
       doorHinge: o.hinge,
       doorSwing: o.swing,
     });
+    if (selectedO) {
+      // a thin green leaf alone was too easy to miss: outline the whole cut
+      ctx.strokeStyle = ACCENT;
+      ctx.lineWidth = 2.5 / zoom;
+      ctx.strokeRect(-o.width / 2, -t / 2 - hair, o.width, t + hair * 2);
+    }
     ctx.restore();
 
     if (selectedO) {
@@ -822,10 +830,11 @@ export function renderPlan(
       ctx.globalAlpha = 0.55;
       ctx.translate(p.x + g.inward.x * off, p.y + g.inward.y * off);
       ctx.rotate(g.angle);
-      ctx.fillStyle = PAPER;
+      const ok = overlays.ghostOpening.valid !== false;
+      ctx.fillStyle = ok ? PAPER : 'rgba(220, 60, 50, 0.55)';
       ctx.fillRect(-armed.w / 2, -t / 2, armed.w, t);
       drawPlanSymbol(ctx, armed.kind, armed.w, t, {
-        color: '#fff',
+        color: ok ? '#fff' : '#c0392b',
         selected: false,
         pxPerM: zoom,
       });

@@ -92,7 +92,7 @@ describe('syncSelection', () => {
     expect(editor.selection).toEqual({ kind: 'none' });
   });
 
-  it('a design swap clears the selection outright, and undo counts as one', () => {
+  it('undo drops a selection whose entity the restored design no longer has', () => {
     const { store, editor } = setup();
     const it = store.addItem(store.defOf('base-cabinet'), 1, 1);
     store.commit();
@@ -100,6 +100,32 @@ describe('syncSelection', () => {
 
     store.undo();
     expect(editor.selection).toEqual({ kind: 'none' });
+  });
+
+  it('undo/redo KEEP a selection that still resolves', () => {
+    const { store, editor } = setup();
+    const it = store.addItem(store.defOf('base-cabinet'), 1, 1);
+    store.commit();
+    editor.select({ kind: 'item', id: it.id });
+    store.updateItem(it.id, { x: 2 });
+    store.commit();
+
+    store.undo();
+    expect(editor.selection).toEqual({ kind: 'item', id: it.id });
+    store.redo();
+    expect(editor.selection).toEqual({ kind: 'item', id: it.id });
+  });
+
+  it('loading a different document clears the selection and the history', () => {
+    const { store, editor } = setup();
+    const it = store.addItem(store.defOf('base-cabinet'), 1, 1);
+    store.commit();
+    editor.select({ kind: 'item', id: it.id });
+
+    store.replaceDesign(JSON.parse(JSON.stringify(store.design)));
+    expect(editor.selection).toEqual({ kind: 'none' });
+    expect(store.canUndo()).toBe(false);
+    expect(store.canRedo()).toBe(false);
   });
 
   it('the disposer drops both subscriptions', () => {

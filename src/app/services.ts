@@ -140,6 +140,7 @@ export function createServices(): AppServices {
     getArmed: () => plan.armedDef,
     clearArmed: () => plan.setArmed(null),
     editor,
+    onHint: (hint) => setHint(hint),
   });
 
   /**

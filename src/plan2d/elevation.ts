@@ -1,9 +1,11 @@
+import { hugWall } from '../model/fit';
 import { clamp, fmtCm } from '../model/geometry';
 import {
   wallElevation,
   type ElevationFront,
   type WallElevation,
   type WallElevationItem,
+  type WallElevationOpening,
 } from '../model/elevation';
 import type { RoomWall } from '../model/rooms';
 import type { EditorState } from '../editor/editorState';
@@ -46,6 +48,8 @@ export class ElevationView {
   private cssW = 100;
   private cssH = 100;
   private raf = 0;
+  /** a door/window being slid (and, for a window, raised) in this view */
+  private openingDrag: { id: string; dt: number; dz: number; moved: boolean } | null = null;
   private drag: { sx: number; sy: number; panX0: number; panY0: number; moved: boolean } | null =
     null;
   private pinch = new PinchGesture(); // two-finger pinch-zoom / pan (touch)
@@ -100,13 +104,10 @@ export class ElevationView {
           this.requestDraw();
         }
       }),
-      this.editor.subscribeSelection(() => {
-        // follow a wall picked in the plan; otherwise just repaint the highlight
-        const sel = this.editor.selection;
-        if (sel.kind === 'wall' && sel.id !== this.wallId) this.setWall(sel.id);
-        else this.requestDraw();
-      })
+      this.editor.subscribeSelection(() => this.followSelection())
     );
+    // opened AFTER something was picked: start on that thing's wall
+    this.followSelection();
 
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e), { signal });
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e), { signal });
@@ -144,6 +145,25 @@ export class ElevationView {
   /** Permanent teardown. Nothing here is GPU-backed, so it is exactly detach(). */
   dispose(): void {
     this.detach();
+  }
+
+  /**
+   * Show the wall the selection lives on: a picked wall, a door/window's host
+   * wall, or the wall an item stands against. Anything else just repaints the
+   * highlight. (It used to follow walls only, so opening Elevation with a
+   * window selected showed some other wall.)
+   */
+  private followSelection(): void {
+    const sel = this.editor.selection;
+    let wallId: string | null = null;
+    if (sel.kind === 'wall') wallId = sel.id;
+    else if (sel.kind === 'opening') wallId = this.store.openingById(sel.id)?.wallId ?? null;
+    else if (sel.kind === 'item') {
+      const it = this.store.itemById(sel.id);
+      wallId = it ? (hugWall(this.store.design, it)?.wall.id ?? null) : null;
+    }
+    if (wallId && wallId !== this.wallId) this.setWall(wallId);
+    else this.requestDraw();
   }
 
   /* ---------------- wall selection ---------------- */
@@ -265,6 +285,17 @@ export class ElevationView {
 
   /* ---------------- interaction ---------------- */
 
+  private hitOpening(t: number, z: number): WallElevationOpening | null {
+    const data = this.data();
+    if (!data) return null;
+    const pad = coarsePointer ? hitRadius(6) / this.zoom : 0;
+    return (
+      data.openings.find(
+        (o) => Math.abs(t - o.center) <= o.width / 2 + pad && z >= o.z0 - pad && z <= o.z1 + pad
+      ) ?? null
+    );
+  }
+
   private hitItem(t: number, z: number): WallElevationItem | null {
     const data = this.data();
     if (!data) return null;
@@ -306,6 +337,15 @@ export class ElevationView {
       this.drag = null;
       return;
     }
+    // a door or window is edited here like in the plan: drag slides it along
+    // the wall, and a window's vertical drag sets its sill
+    const op = this.hitOpening(wpt.t, wpt.z);
+    if (op && this.wallId) {
+      this.editor.select({ kind: 'opening', id: op.id });
+      this.openingDrag = { id: op.id, dt: op.center - wpt.t, dz: op.z0 - wpt.z, moved: false };
+      this.drag = null;
+      return;
+    }
     this.drag = { sx: e.offsetX, sy: e.offsetY, panX0: this.panX, panY0: this.panY, moved: false };
   }
 
@@ -322,6 +362,28 @@ export class ElevationView {
       this.requestDraw();
       return;
     }
+    if (this.openingDrag && this.wallId) {
+      const d = this.openingDrag;
+      const o = this.store.openingById(d.id);
+      const wpt = this.toWorld(e.offsetX, e.offsetY);
+      if (o) {
+        d.moved = true;
+        this.store.updateOpening(
+          d.id,
+          {
+            wallId: this.wallId,
+            offset: wpt.t + d.dt,
+            ...(o.type === 'window'
+              ? { sill: Math.max(0, Math.round((wpt.z + d.dz) * 100) / 100) }
+              : {}),
+          },
+          { structural: true, transient: true }
+        );
+        this.canvas.style.cursor = 'grabbing';
+        this.requestDraw();
+      }
+      return;
+    }
     if (this.drag) {
       this.panX = this.drag.panX0 + (e.offsetX - this.drag.sx);
       this.panY = this.drag.panY0 + (e.offsetY - this.drag.sy);
@@ -331,7 +393,11 @@ export class ElevationView {
       return;
     }
     const wpt = this.toWorld(e.offsetX, e.offsetY);
-    this.canvas.style.cursor = this.hitItem(wpt.t, wpt.z) ? 'pointer' : 'default';
+    this.canvas.style.cursor = this.hitItem(wpt.t, wpt.z)
+      ? 'pointer'
+      : this.hitOpening(wpt.t, wpt.z)
+        ? 'grab'
+        : 'default';
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -341,6 +407,10 @@ export class ElevationView {
       this.pinching = false;
       this.canvas.style.cursor = 'default';
       return;
+    }
+    if (this.openingDrag) {
+      if (this.openingDrag.moved) this.store.commit();
+      this.openingDrag = null;
     }
     if (this.drag && !this.drag.moved) this.editor.select({ kind: 'none' });
     this.drag = null;
@@ -396,15 +466,18 @@ export class ElevationView {
     ctx.strokeRect(p0.x, p0.y - wallH, wallW, wallH);
 
     // ---- openings (doors / windows cut into the wall) ----
+    const picked = this.editor.selection;
     for (const o of data.openings) {
       const a = this.toScreen(o.center - o.width / 2, o.z1);
       const w = o.width * this.zoom;
       const h = (o.z1 - o.z0) * this.zoom;
+      const selected = picked.kind === 'opening' && picked.id === o.id;
       ctx.fillStyle = o.type === 'window' ? '#dbe7ef' : '#f4f3f0';
       ctx.fillRect(a.x, a.y, w, h);
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = selected ? ACCENT : INK;
+      ctx.lineWidth = selected ? 2.4 : 1.2;
       ctx.strokeRect(a.x, a.y, w, h);
+      if (selected) this.drawOpeningDims(o, data.len);
       if (o.type === 'window') {
         ctx.beginPath();
         ctx.moveTo(a.x + w / 2, a.y);
@@ -501,6 +574,60 @@ export class ElevationView {
   }
 
   /** wall length label centred below the floor line */
+  /**
+   * The numbers a selected door/window is placed by: the gaps to both wall
+   * ends, the sill and the head height — the same values the inspector edits.
+   */
+  private drawOpeningDims(o: WallElevationOpening, len: number): void {
+    const ctx = this.ctx;
+    const lo = o.center - o.width / 2;
+    const hi = o.center + o.width / 2;
+    const mid = (o.z0 + o.z1) / 2;
+    const label = (x: number, y: number, m: number): void => {
+      const text = `${Math.round(m * 100)} cm`;
+      ctx.font = '600 11px system-ui, sans-serif';
+      const tw = ctx.measureText(text).width + 8;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillRect(x - tw / 2, y - 8, tw, 16);
+      ctx.fillStyle = ACCENT;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, x, y);
+    };
+    const hline = (t0: number, t1: number, z: number): void => {
+      const a = this.toScreen(t0, z);
+      const b = this.toScreen(t1, z);
+      ctx.strokeStyle = ACCENT;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (Math.abs(t1 - t0) > 0.05) label((a.x + b.x) / 2, a.y, Math.abs(t1 - t0));
+    };
+    const vline = (t: number, z0: number, z1: number): void => {
+      const a = this.toScreen(t, z0);
+      const b = this.toScreen(t, z1);
+      ctx.strokeStyle = ACCENT;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (Math.abs(z1 - z0) > 0.05) label(a.x, (a.y + b.y) / 2, Math.abs(z1 - z0));
+    };
+    ctx.save();
+    hline(0, lo, mid);
+    hline(hi, len, mid);
+    if (o.z0 > 0.01) vline(o.center, 0, o.z0);
+    vline(hi + 0.12, 0, o.z1);
+    ctx.restore();
+  }
+
   private drawDimension(p0: Point, data: WallElevation): void {
     const ctx = this.ctx;
     ctx.font = '600 12px Inter, system-ui, sans-serif';

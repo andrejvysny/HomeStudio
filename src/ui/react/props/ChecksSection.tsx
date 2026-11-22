@@ -42,9 +42,17 @@ export function ChecksSection({ list, exceptId, cap }: ChecksSectionProps): Reac
 function CheckRow({ w, exceptId }: { w: Warning; exceptId?: string }): ReactElement {
   const store = useStore();
   const editor = useEditor();
-  const target = w.itemIds.find((id) => id !== exceptId) ?? w.itemIds[0];
-  const pickable = !!target && !!store.itemById(target);
-  const pick = (): void => editor.select({ kind: 'item', id: target });
+  const live = w.itemIds.filter((id) => store.itemById(id));
+  const target = live.find((id) => id !== exceptId) ?? live[0];
+  const opening = w.openingId && store.openingById(w.openingId) ? w.openingId : null;
+  const pickable = !!target || !!opening;
+  const pick = (): void => {
+    // inside an item's own panel the row jumps to the OTHER party; from the
+    // room panel it selects every item involved, so both are highlighted
+    if (exceptId && target) editor.select({ kind: 'item', id: target });
+    else if (live.length) editor.selectRefs(live.map((id) => ({ kind: 'item' as const, id })));
+    else if (opening) editor.select({ kind: 'opening', id: opening });
+  };
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Enter' || e.key === ' ') {

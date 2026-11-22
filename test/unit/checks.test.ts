@@ -646,7 +646,12 @@ describe('store warnings cache', () => {
     expect(store.warnings()).toHaveLength(1);
     store.replaceDesign(design({ items: [item('base-cabinet', 1, 1)] }));
     expect(store.warnings()).toEqual([]);
-    store.undo();
+    // a load starts a fresh history — undo cannot walk back past it
+    expect(store.canUndo()).toBe(false);
+    store.addItem(store.defOf('base-cabinet'), 1.4, 1);
+    store.commit();
     expect(store.warnings()).toHaveLength(1);
+    store.undo();
+    expect(store.warnings()).toEqual([]);
   });
 });

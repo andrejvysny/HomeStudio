@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useLayoutEffect, useRef, type ReactElement } from 'react';
 import { useEditor, useStore } from './services';
 import { useChannel } from './hooks/useStore';
 import { PropsBody } from './props/PropsBody';
@@ -31,8 +31,15 @@ export function PropsPanel(): ReactElement {
       ? `room:${store.activeRoomId}`
       : `${sel.kind}:${sel.id}:${editor.entities.length}`;
 
+  // a DIFFERENT object starts at its title — the scroll position used to
+  // carry over, hiding which object the fields belonged to
+  const aside = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (aside.current) aside.current.scrollTop = 0;
+  }, [key]);
+
   return (
-    <aside id="props">
+    <aside id="props" ref={aside}>
       <div id="props-inner">
         <PropsBody key={key} />
       </div>

@@ -666,6 +666,15 @@ body {
 }
 #pane3d {
   background: #e8e6e1;
+  container-type: inline-size;
+}
+
+/* a narrow 3D pane (Split on a laptop) cannot hold the scene toggles and the
+   camera presets on one line — lift the toggles above the presets */
+@container (max-width: 560px) {
+  .canvas-overlay-scene {
+    bottom: 56px;
+  }
 }
 
 /* shown while the WebGL context is lost and the browser restores it */
@@ -1139,6 +1148,14 @@ body {
 
 .props-sub.room-shared {
   margin-top: -10px;
+}
+
+/* one explanatory line under a field or switch */
+.prop-hint {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+  margin: -2px 0 8px;
 }
 
 /* the room panel's title doubles as its rename field */
@@ -1818,9 +1835,18 @@ body {
 
 .studio-form .prop-row input[type='range'] {
   width: 90px;
+  min-width: 0;
+  flex: 1;
 }
+/* four digits of millimetres plus the spinner must fit: 58 px clipped 2980 to "298(" */
 .studio-form .prop-row input[type='number'] {
-  width: 58px;
+  width: 72px;
+  flex: none;
+}
+/* long choice labels ("Sliding 3") wrap instead of running out of the rail */
+.studio-form .choice {
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .studio-preview {
@@ -2281,6 +2307,20 @@ body {
 
 .coach-skip:hover {
   background: var(--bg);
+}
+
+/* the obvious way forward; clicking anywhere still advances too */
+.coach-next {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-left: auto;
+  margin-right: 6px;
 }
 
 /* ---------- Scrollbars ---------- */

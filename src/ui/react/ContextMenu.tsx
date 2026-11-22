@@ -84,6 +84,7 @@ export function ContextMenu(): ReactElement | null {
         multiRoom: store.design.rooms.length > 1,
         activeRoomId: store.activeRoomId,
         itemFittable: hit.kind === 'item' ? isFittable(store, hit.itemId) : false,
+        openingType: hit.kind === 'opening' ? store.openingById(hit.openingId)?.type : undefined,
       });
       // no entries = no popup. An empty menu is worse than no menu.
       if (!entries.length) {
@@ -96,6 +97,7 @@ export function ContextMenu(): ReactElement | null {
       // an ENTRY here, so auto-activating would delete its own menu item.
       if (hit.kind === 'item') editor.select({ kind: 'item', id: hit.itemId });
       else if (hit.kind === 'wall') editor.select({ kind: 'wall', id: hit.wallId });
+      else if (hit.kind === 'opening') editor.select({ kind: 'opening', id: hit.openingId });
       setMenu({ x: e.clientX, y: e.clientY, hit, entries });
     };
 
@@ -105,13 +107,12 @@ export function ContextMenu(): ReactElement | null {
     };
     const on3d = (e: MouseEvent): void => {
       e.preventDefault();
-      // 3D picks items and nothing else: walls and rooms are edited in the plan
-      const item = view3d.pickItem(e);
-      if (!item) {
-        setMenu(null);
-        return;
-      }
-      open({ kind: 'item', itemId: item.id }, e);
+      // 3D picks items and openings; walls and rooms are edited in the plan
+      const ref = view3d.pickEntity(e);
+      const o = ref?.kind === 'opening' ? store.openingById(ref.id) : undefined;
+      if (ref?.kind === 'item') open({ kind: 'item', itemId: ref.id }, e);
+      else if (o) open({ kind: 'opening', openingId: o.id, wallId: o.wallId, t: o.offset }, e);
+      else setMenu(null);
     };
 
     plan2d.addEventListener('contextmenu', onPlan);
@@ -166,7 +167,7 @@ export function ContextMenu(): ReactElement | null {
     switch (id) {
       /* ---- wall ---- */
       case 'add-corner': {
-        if (hit.kind !== 'wall') return;
+        if (hit.kind !== 'wall' && hit.kind !== 'opening') return;
         // the same three lines Plan2D's dblclick runs — one behaviour, two routes
         const corner = store.splitWall(hit.wallId, hit.t);
         if (!corner) return;
@@ -195,6 +196,33 @@ export function ContextMenu(): ReactElement | null {
         scrollToSection('section-walls');
         return;
       }
+
+      /* ---- door / window ---- */
+      case 'flip-hinge':
+      case 'flip-swing':
+      case 'opening-type': {
+        if (hit.kind !== 'opening') return;
+        const o = store.openingById(hit.openingId);
+        if (!o) return;
+        if (id === 'flip-hinge') {
+          store.updateOpening(o.id, { hinge: (o.hinge ?? 'left') === 'left' ? 'right' : 'left' });
+        } else if (id === 'flip-swing') {
+          store.updateOpening(o.id, { swing: (o.swing ?? 'in') === 'in' ? 'out' : 'in' });
+        } else {
+          store.updateOpening(
+            o.id,
+            o.type === 'door' ? { type: 'window' } : { type: 'door', sill: 0 }
+          );
+        }
+        editor.select({ kind: 'opening', id: o.id });
+        store.commit();
+        return;
+      }
+      case 'delete-opening':
+        if (hit.kind !== 'opening') return;
+        editor.select({ kind: 'opening', id: hit.openingId });
+        commands.execute('selection.delete');
+        return;
 
       /* ---- room ---- */
       case 'activate-room':

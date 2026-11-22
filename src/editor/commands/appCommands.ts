@@ -1,4 +1,5 @@
 import { roomOfItem } from '../../model/rooms';
+import { keepInsideWalls } from '../../model/wallFollow';
 import type { CustomPartDef, Item } from '../../model/types';
 import { rotateAbout, selectionCentre, withoutCarried } from '../selectionOps';
 import type { CommandDefinition, EditorContext, WorkspaceId } from './types';
@@ -95,9 +96,23 @@ function rotate(ctx: EditorContext, step: number): void {
   const items = selectedItems(ctx);
   const centre = selectionCentre(items);
   if (!centre) return;
-  for (const p of rotateAbout(items, centre, step)) {
+  // A group spread over several rooms has no shared middle worth turning
+  // about — swinging it flung a bed through one partition and a sofa through
+  // another. Such a set turns each member in place instead.
+  const rooms = new Set(items.map((it) => roomOfItem(ctx.store.design, it)?.id ?? ''));
+  const poses =
+    rooms.size > 1
+      ? items.flatMap((it) => rotateAbout([it], { x: it.x, y: it.y }, step))
+      : rotateAbout(items, centre, step);
+  for (const p of poses) {
     ctx.store.updateItem(p.id, { x: p.x, y: p.y, rotation: p.rotation }, { structural: false });
+    const it = ctx.store.itemById(p.id);
+    if (it && !it.attach) {
+      // a turn must not leave half the item inside a wall
+      keepInsideWalls(ctx.store.design, it);
+    }
   }
+  ctx.store.notify({ structural: false });
   ctx.store.commit();
 }
 

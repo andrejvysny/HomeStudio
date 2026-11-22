@@ -54,7 +54,7 @@ export function Topbar(): ReactElement {
     <header id="topbar">
       <div className="brand">
         <span className="brand-mark">▦</span>
-        <span className="brand-name">Interior Planner</span>
+        <span className="brand-name">HomeStudio</span>
       </div>
       <CatalogButton />
       <WorkspaceTabs />
@@ -346,6 +346,9 @@ function NavInputRow(): ReactElement {
 function FileGroup(): ReactElement {
   const { store, plan } = useAppServices();
   const fileInput = useRef<HTMLInputElement>(null);
+  // Save keeps the name of the file that was loaded, so a round trip does
+  // not silently fork "plan.json" into "interior-design.json"
+  const fileName = useRef('interior-design.json');
 
   const onNew = async (): Promise<void> => {
     const ok = await confirmDialog({
@@ -356,12 +359,13 @@ function FileGroup(): ReactElement {
     if (!ok) return;
     plan.setArmed(null);
     store.replaceDesign(emptyDesign());
+    fileName.current = 'interior-design.json';
     plan.zoomFit();
   };
 
   const onSave = (): void => {
     const blob = new Blob([store.exportJson()], { type: 'application/json' });
-    download(URL.createObjectURL(blob), 'interior-design.json');
+    download(URL.createObjectURL(blob), fileName.current);
   };
 
   const onFile = async (): Promise<void> => {
@@ -398,7 +402,18 @@ function FileGroup(): ReactElement {
       const src = (raw as { underlaySrc?: unknown }).underlaySrc;
       const hasSrc = typeof src === 'string' && !!src;
       if (!hasSrc) delete d.underlay;
+      // asked AFTER the file is picked (a dialog before the picker would cost
+      // the user gesture the picker needs) and only when there is a plan to lose
+      if (store.design.rooms.length || store.design.items.length) {
+        const ok = await confirmDialog({
+          title: `Open “${f.name}”?`,
+          body: 'This replaces the current design. Save it first if you want to keep it.',
+          confirmLabel: 'Open',
+        });
+        if (!ok) return;
+      }
       store.replaceDesign(d);
+      fileName.current = f.name;
       if (hasSrc && d.underlay && !store.setUnderlay(src as string)) {
         setHint(
           'Design loaded, but the reference photo could not be stored — storage is full or blocked',

@@ -40,6 +40,12 @@ subscribe and never talk to each other directly.
     picking, `snapshotPNG` and `exportGLB` already do.
 - Undo = JSON snapshots. Mutations do NOT auto-commit: call `store.commit()`
   at gesture end (pointerup, input change). Forgetting commit = broken undo.
+  `replaceDesign` (Load / New / demo) CLEARS both stacks — undoing past a load
+  used to restore the empty design and autosave persisted it. The `'reset'`
+  event carries `{kind: 'restore' | 'replace'}`: undo/redo only PRUNE the
+  selection (selectionSync.ts), a replace clears it. Undo/redo keys also run
+  from a focused inspector field once its text is committed
+  (`allowWhenCommitted` in bindings.ts; KeyboardController tracks dirty fields).
 - `store.partOf(defId)` resolves a part def: design-local custom part first
   (`design.customParts`), then the built-in cabinet PRESETS
   (src/model/presets.ts — readonly, deep-frozen, never copied into a design).
@@ -1137,6 +1143,23 @@ at the END of `CATALOG`: `CatalogPanel` injects "My parts" after section index
 - `setWallLength` propagates movement through perpendicular neighbor walls
   using ORIGINAL edge directions (rectangles stay rectangles) — don't
   "simplify" it to post-move checks; test 'wall length edit' catches this.
+  `wallEndRun` does that walk ACROSS rooms: a partition end is one corner per
+  ring, so it moves in every ring (and `moveCorner` moves coincident corners
+  too) — otherwise the edit tears the partition into `parallelWalls`.
+- Wall edits carry what stands on the wall: `captureWallAnchors` (before) +
+  `applyWallAnchors` (after, inside `renormalizeRoom`, BEFORE syncDerived) in
+  src/model/wallFollow.ts re-seat every item `hugWall` finds, measured from the
+  wall end that did not move. A typed width on such an item keeps its
+  touching edge (`anchoredResizeShift`, applied in `updateItem`).
+- Openings never overlap (src/model/openingFit.ts): `addOpening`/
+  `updateOpening` slide a move to the nearest free gap (OPENING_PIER apart) or
+  cap a resize at the neighbour; placement asks `store.openingSlot` first and
+  refuses (red ghost) when a wall has no room. Offsets given on a partition's
+  NON-owner side are mirrored into the owner frame (`toOwnerFrame`). Files that
+  arrive overlapping get the `openingOverlap` error check.
+- 3D picking (`View3D.pickEntity`) rays walls/floors too and takes the nearest
+  VISIBLE hit, so nothing behind a wall is selectable; opening groups carry
+  `userData.openingId`, wall groups `userData.wallId` (3D opening placement).
 - GLB export (View3D.exportGLB) strips `isLight` objects and `Ground`,
   temporarily clears the selection tint so it doesn't bake into materials,
   and snaps all open-front poses closed for the clone (snapshotPNG stays

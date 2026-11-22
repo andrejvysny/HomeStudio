@@ -122,7 +122,11 @@ export function NumericRow<T>({
       el.value = current();
       return;
     }
+    // show what the expression came to ("1200+300" → 1500), and what the
+    // model actually took after clamping and neighbour limits — read back, so
+    // an opening stopped at its neighbour shows the width it really got
     commit(m);
+    el.value = current();
   });
 
   /**

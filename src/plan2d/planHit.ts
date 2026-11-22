@@ -14,12 +14,15 @@ export type ContextHit =
   /** a placed item — the topmost of the stack under the point */
   | { kind: 'item'; itemId: string }
   /**
-   * a wall, or an opening sitting on one (an opening reports its host wall:
-   * every wall-level action still applies, and the opening has its own panel).
-   * `t` is the click's distance from the wall's START corner, in METRES —
+   * a wall. `t` is the click's distance from the wall's START corner, in METRES —
    * exactly what `store.splitWall(wallId, t)` takes, not a 0..1 fraction.
    */
   | { kind: 'wall'; wallId: string; t: number }
+  /**
+   * a door or window. `wallId`/`t` are its host wall and the click along it,
+   * so a wall-level fallback stays possible.
+   */
+  | { kind: 'opening'; openingId: string; wallId: string; t: number }
   /** bare floor inside a room's polygon */
   | { kind: 'room'; roomId: string }
   /** outside every room, and over nothing modelled */
